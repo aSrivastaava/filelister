@@ -1,0 +1,236 @@
+# Backup of original app.py
+# If you need to restore, rename this file back to app.py
+
+# Original contents were moved to src/filelister/main.py
+
+import os
+import sys
+import threading
+import time
+from datetime import datetime
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+
+# Simple cross-platform file listing GUI for Windows
+# - Select a folder
+# - Display files and directories in a tree
+# - Show Name, Type, Size, Modified
+
+
+class FileListerApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("File Lister")
+        self.geometry("900x600")
+
+        self.create_widgets()
+
+    def create_widgets(self):
+        top = ttk.Frame(self)
+        top.pack(fill=tk.X, padx=8, pady=6)
+
+        self.path_var = tk.StringVar()
+
+        path_entry = ttk.Entry(top, textvariable=self.path_var)
+        path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+
+        browse_btn = ttk.Button(top, text="Browse...", command=self.browse)
+        browse_btn.pack(side=tk.LEFT)
+
+        refresh_btn = ttk.Button(top, text="Refresh", command=self.refresh)
+        refresh_btn.pack(side=tk.LEFT, padx=(6, 0))
+
+        self.status_var = tk.StringVar()
+        status = ttk.Label(self, textvariable=self.status_var)
+        status.pack(fill=tk.X, padx=8, pady=(0,6))
+
+        # Treeview
+        columns = ("type", "size", "modified")
+        self.tree = ttk.Treeview(self, columns=columns, show="tree headings")
+        self.tree.heading("#0", text="Name", anchor=tk.W)
+        self.tree.heading("type", text="Type")
+        self.tree.heading("size", text="Size")
+        self.tree.heading("modified", text="Modified")
+
+        self.tree.column("type", width=100, anchor=tk.W)
+        self.tree.column("size", width=120, anchor=tk.E)
+        self.tree.column("modified", width=180, anchor=tk.W)
+
+        self.tree.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
+
+        # double-click to open file
+        self.tree.bind('<Double-1>', self.on_double)
+
+    def browse(self):
+        path = filedialog.askdirectory()
+        if path:
+            self.path_var.set(path)
+            self.load_path(path)
+
+    def refresh(self):
+        path = self.path_var.get()
+        if not path:
+            messagebox.showinfo("Info", "Please select a directory first")
+            return
+        self.load_path(path)
+
+    def set_status(self, text):
+        self.status_var.set(text)
+        self.update_idletasks()
+
+    def load_path(self, path):
+        # clear tree
+        children = self.tree.get_children()
+        if children:
+            try:
+                self.tree.delete(*children)
+            except Exception:
+                # fallback to deleting one by one
+                for i in children:
+                    try:
+                        self.tree.delete(i)
+                    except Exception:
+                        pass
+
+        # start background thread
+        self.set_status("Scanning...")
+        t = threading.Thread(target=self._scan_and_populate, args=(path,))
+        t.daemon = True
+        t.start()
+
+    def _scan_and_populate(self, path):
+        try:
+            count = 0
+            start = time.time()
+            for root, dirs, files in os.walk(path):
+                # compute indent by relative depth
+                rel_root = os.path.relpath(root, path)
+                if rel_root == ".":
+                    parent = ''
+                else:
+                    # find parent element in tree - simple approach: use full path as id
+                    parent = rel_root
+                # ensure parent nodes exist
+                if parent and not self._id_exists(parent):
+                    # create intermediate nodes
+                    parts = rel_root.split(os.sep)
+                    cur = ''
+                    for p in parts:
+                        cur = p if not cur else os.path.join(cur, p)
+                        if not self._id_exists(cur):
+                            self._insert_node(cur, os.path.basename(cur), 'Directory', '', '')
+
+                # insert dirs
+                for d in dirs:
+                    node_id = os.path.join(rel_root if rel_root != '.' else '', d)
+                    full = os.path.join(root, d)
+                    try:
+                        mtime = os.path.getmtime(full)
+                        mstr = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        mstr = ''
+                    self._insert_node(node_id, d, 'Directory', '', mstr)
+                    count += 1
+
+                for f in files:
+                    node_id = os.path.join(rel_root if rel_root != '.' else '', f)
+                    full = os.path.join(root, f)
+                    try:
+                        size = os.path.getsize(full)
+                        size_str = f"{size:,} bytes"
+                    except Exception:
+                        size_str = ''
+                    try:
+                        mtime = os.path.getmtime(full)
+                        mstr = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        mstr = ''
+                    self._insert_node(node_id, f, 'File', size_str, mstr)
+                    count += 1
+
+                # update status occasionally
+                if count % 100 == 0:
+                    self.set_status(f"Scanning... {count} items")
+
+            elapsed = time.time() - start
+            self.set_status(f"Done. {count} items in {elapsed:.1f}s")
+        except Exception as e:
+            self.set_status(f"Error: {e}")
+
+    def _id_exists(self, iid):
+        try:
+            # rely on Treeview's exists which is accurate for any iid
+            return bool(self.tree.exists(iid))
+        except Exception:
+            return False
+
+    def _insert_node(self, nid, text, typ, size, modified):
+        # run in main thread
+        def cb():
+            # if parent is nested path, determine its parent id
+            parent = ''
+            if os.sep in nid:
+                parent = os.path.dirname(nid)
+            # if parent is '.', treat as root
+            if parent == '.':
+                parent = ''
+            # ensure parent chain exists (create parents synchronously so child inserts won't fail)
+            def ensure_parent(p):
+                if not p or self.tree.exists(p):
+                    return
+                # determine parent's parent
+                pp = os.path.dirname(p) if os.sep in p else ''
+                if pp == '.':
+                    pp = ''
+                ensure_parent(pp)
+                # insert this parent if still missing
+                if not self.tree.exists(p):
+                    try:
+                        self.tree.insert(pp, 'end', p, text=os.path.basename(p), values=('Directory', '', ''))
+                    except Exception:
+                        # if insert fails, ignore and continue; child insert may still fail and be reported
+                        pass
+
+            ensure_parent(parent)
+            # avoid duplicates
+            if self.tree.exists(nid):
+                return
+            try:
+                self.tree.insert(parent, 'end', nid, text=text, values=(typ, size, modified))
+            except Exception:
+                # insertion failed (parent may not exist); attempt to create parent then retry once
+                ensure_parent(parent)
+                try:
+                    if not self.tree.exists(nid):
+                        self.tree.insert(parent, 'end', nid, text=text, values=(typ, size, modified))
+                except Exception:
+                    pass
+        try:
+            self.after(0, cb)
+        except Exception:
+            pass
+
+    def on_double(self, event):
+        item = self.tree.focus()
+        if not item:
+            return
+        typ = self.tree.set(item, 'type')
+        # build full path
+        root_path = self.path_var.get()
+        rel = item
+        full = os.path.join(root_path, rel)
+        if typ == 'File':
+            try:
+                if sys.platform.startswith('win'):
+                    os.startfile(full)
+                else:
+                    # attempt generic opener
+                    import subprocess
+                    subprocess.Popen(['xdg-open', full])
+            except Exception as e:
+                messagebox.showerror('Open file', f'Could not open file: {e}')
+
+
+if __name__ == '__main__':
+    app = FileListerApp()
+    app.mainloop()
