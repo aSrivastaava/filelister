@@ -50,6 +50,8 @@ class FileListerApp(tk.Tk):
 
         # double-click to open file
         self.tree.bind('<Double-1>', self.on_double)
+        # expand event for lazy-loading
+        self.tree.bind('<<TreeviewOpen>>', self.on_open)
 
     def browse(self):
         path = filedialog.askdirectory()
@@ -69,83 +71,140 @@ class FileListerApp(tk.Tk):
         self.update_idletasks()
 
     def load_path(self, path):
+        # store root path for building full paths
+        self.root_path = path
+
         # clear tree
         children = self.tree.get_children()
         if children:
             try:
                 self.tree.delete(*children)
             except Exception:
-                # fallback to deleting one by one
                 for i in children:
                     try:
                         self.tree.delete(i)
                     except Exception:
                         pass
 
-        # start background thread
-        self.set_status("Scanning...")
-        t = threading.Thread(target=self._scan_and_populate, args=(path,))
+        # List top-level entries in background to avoid blocking UI
+        self.set_status("Listing top-level entries...")
+        t = threading.Thread(target=self._list_top_level, args=(path,))
         t.daemon = True
         t.start()
 
-    def _scan_and_populate(self, path):
+    def _list_top_level(self, path):
         try:
-            count = 0
-            start = time.time()
-            for root, dirs, files in os.walk(path):
-                # compute indent by relative depth
-                rel_root = os.path.relpath(root, path)
-                if rel_root == ".":
-                    parent = ''
-                else:
-                    # find parent element in tree - simple approach: use full path as id
-                    parent = rel_root
-                # ensure parent nodes exist
-                if parent and not self._id_exists(parent):
-                    # create intermediate nodes
-                    parts = rel_root.split(os.sep)
-                    cur = ''
-                    for p in parts:
-                        cur = p if not cur else os.path.join(cur, p)
-                        if not self._id_exists(cur):
-                            self._insert_node(cur, os.path.basename(cur), 'Directory', '', '')
+            entries = []
+            try:
+                for name in sorted(os.listdir(path), key=lambda s: s.lower()):
+                    full = os.path.join(path, name)
+                    entries.append((name, full))
+            except Exception as e:
+                self.set_status(f"Error listing folder: {e}")
+                return
 
-                # insert dirs
-                for d in dirs:
-                    node_id = os.path.join(rel_root if rel_root != '.' else '', d)
-                    full = os.path.join(root, d)
-                    try:
-                        mtime = os.path.getmtime(full)
-                        mstr = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
-                    except Exception:
-                        mstr = ''
-                    self._insert_node(node_id, d, 'Directory', '', mstr)
-                    count += 1
+            # prepare lightweight metadata then insert on main thread
+            def insert_top():
+                for name, full in entries:
+                    rel = name
+                    if os.path.isdir(full):
+                        # directory: add node and a dummy child so it's expandable
+                        try:
+                            self.tree.insert('', 'end', rel, text=name, values=('Directory', '', ''))
+                            # dummy child
+                            dummy_id = rel + '__dummy'
+                            self.tree.insert(rel, 'end', dummy_id, text='')
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            size = os.path.getsize(full)
+                            mtime = os.path.getmtime(full)
+                            mstr = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+                            size_str = f"{size:,} bytes"
+                        except Exception:
+                            mstr = ''
+                            size_str = ''
+                        try:
+                            self.tree.insert('', 'end', rel, text=name, values=('File', size_str, mstr))
+                        except Exception:
+                            pass
+                self.set_status(f"Listed {len(entries)} top-level items")
 
-                for f in files:
-                    node_id = os.path.join(rel_root if rel_root != '.' else '', f)
-                    full = os.path.join(root, f)
-                    try:
-                        size = os.path.getsize(full)
-                        size_str = f"{size:,} bytes"
-                    except Exception:
-                        size_str = ''
-                    try:
-                        mtime = os.path.getmtime(full)
-                        mstr = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
-                    except Exception:
-                        mstr = ''
-                    self._insert_node(node_id, f, 'File', size_str, mstr)
-                    count += 1
-
-                # update status occasionally
-                if count % 100 == 0:
-                    self.set_status(f"Scanning... {count} items")
-
-            elapsed = time.time() - start
-            self.set_status(f"Done. {count} items in {elapsed:.1f}s")
+            self.after(0, insert_top)
         except Exception as e:
             self.set_status(f"Error: {e}")
+
+    def on_open(self, event):
+        # lazy-load children when a node is expanded
+        item = self.tree.focus()
+        if not item:
+            return
+        # if the first child is a dummy marker, populate
+        children = self.tree.get_children(item)
+        if children and any(c.endswith('__dummy') for c in children):
+            # remove dummy(s)
+            for c in children:
+                if c.endswith('__dummy'):
+                    try:
+                        self.tree.delete(c)
+                    except Exception:
+                        pass
+            # build full path for this item
+            rel = item
+            full = os.path.join(self.root_path, rel)
+            # populate this node in a background thread
+            t = threading.Thread(target=self._populate_node, args=(item, full))
+            t.daemon = True
+            t.start()
+
+    def _populate_node(self, node_id, full_path):
+        try:
+            entries = []
+            try:
+                names = sorted(os.listdir(full_path), key=lambda s: s.lower())
+            except Exception:
+                names = []
+            for name in names:
+                child_full = os.path.join(full_path, name)
+                entries.append((name, child_full))
+
+            def insert_children():
+                for name, child_full in entries:
+                    # child node id is relative path from root
+                    # compute rel by joining node_id and name
+                    if node_id:
+                        child_rel = os.path.join(node_id, name)
+                    else:
+                        child_rel = name
+
+                    if os.path.isdir(child_full):
+                        try:
+                            if not self.tree.exists(child_rel):
+                                self.tree.insert(node_id, 'end', child_rel, text=name, values=('Directory', '', ''))
+                                # add dummy child
+                                self.tree.insert(child_rel, 'end', child_rel + '__dummy', text='')
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            size = os.path.getsize(child_full)
+                            mtime = os.path.getmtime(child_full)
+                            mstr = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+                            size_str = f"{size:,} bytes"
+                        except Exception:
+                            mstr = ''
+                            size_str = ''
+                        try:
+                            if not self.tree.exists(child_rel):
+                                self.tree.insert(node_id, 'end', child_rel, text=name, values=('File', size_str, mstr))
+                        except Exception:
+                            pass
+
+            self.after(0, insert_children)
+        except Exception as e:
+            # update status with error
+            self.set_status(f"Error populating node: {e}")
 
     def _id_exists(self, iid):
         try:
