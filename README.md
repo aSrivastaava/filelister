@@ -13,23 +13,37 @@ Requirements
 - Python 3.8+
 - Tkinter (usually included with Python on Windows)
 
-Project layout
-
-```
-e:/Projects/SearchInFile/
-├─ src/
-│  └─ filelister/
-│     ├─ __init__.py
-│     └─ main.py
-├─ run.py
-├─ README.md
-└─ requirements.txt
-```
-
 Quick start (PowerShell):
 
 ```powershell
 python .\run.py
+```
+
+## Project Structure Overview
+
+```
+file_lister_app/
+├── src/                        # **Source Code Root:** Contains all Python application logic.
+│   ├── core/                   # **Backend Logic:** Modules for data access and heavy computation, independent of the GUI.
+│   │   ├── __init__.py         # Initializes 'core' as a Python sub-package.
+│   │   ├── file_ops.py         # **Core File Operations:** Functions for listing directories, retrieving file stats (size, date), and size formatting.
+│   │   └── search_ops.py       # **Search Logic:** Functions dedicated to opening files and searching their content for a specific term (the future feature).
+│   ├── views/                  # **Frontend Views:** Modules containing the UI and event handlers for each feature, inheriting from tk.Frame.
+│   │   ├── __init__.py         # Initializes 'views' as a Python sub-package.
+│   │   ├── listing_view.py     # **Listing View:** The Tkinter Frame class containing the directory entry, 'Browse' button, 'Refresh' button, and the Treeview for file display.
+│   │   └── search_view.py      # **Search View:** The Tkinter Frame class containing the search term input, 'Search' button, and the results display list for file content searching.
+│   ├── main_layout.py          # **Main Layout/Container:** The primary Tkinter window (inherits from tk.Tk). Sets up the overall app structure, navigation bar, and handles switching between the different 'views'.
+│   └── main.py                 # **Application Entry Point:** The file executed to start the application. Simply imports and runs the MainLayout class.
+├── assets/                     # **Static Resources:** Contains non-code assets used by the application.
+│   └── icons/                  # Holds application icons and small images used in the GUI.
+│       └── app_icon.ico        # (Example) The application's main icon file.
+├── tests/                      # **Testing Suite:** Directory for all unit and integration tests.
+│   ├── __init__.py             # Initializes 'tests' as a Python sub-package.
+│   ├── test_file_ops.py        # Unit tests ensuring file_ops functions (like listing and formatting) work correctly.
+│   └── test_search_ops.py      # Unit tests for the search_ops functions (testing text matching and file reading).
+├── requirements.txt            # **Dependencies:** Lists all required external Python packages (e.g., `pip install -r requirements.txt`).
+├── README.md                   # **Project Documentation:** Provides a general overview, installation instructions, and usage guide for the application.
+└── .gitignore                  # **Git Exclusion List:** Specifies files and folders that Git should ignore (e.g., virtual environments, compiled files, OS files).
 ```
 
 Notes and next steps:
