@@ -10,6 +10,7 @@ permissions:
   packages: write
   id-token: write
   issues: write
+  issues: write
 
 jobs:
   build-release:
@@ -126,3 +127,25 @@ jobs:
             }
             console.log('No issue reference found in commit message.');
             return 'none';
+
+      - name: Create CI issue on failure
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const sha = process.env.GITHUB_SHA;
+            const workflow = process.env.GITHUB_WORKFLOW;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            // check for existing open issue that mentions this commit
+            const issues = await github.rest.issues.listForRepo({ owner: context.repo.owner, repo: context.repo.repo, state: 'open' });
+            const existing = issues.data.find(i => i.body && i.body.includes(sha));
+            if (existing) {
+              console.log(`Found existing issue #${existing.number} for commit ${sha}`);
+              return existing.number;
+            }
+            const title = `CI failure: ${workflow} ${sha.substring(0,7)}`;
+            const body = `Automated issue created because workflow run failed.\n\nWorkflow: ${workflow}\nRun: ${runUrl}\nCommit: ${sha}\nBranch: ${process.env.GITHUB_REF}\n\nWhen you push a fix, include the issue number (for example, #123) in your commit message to have the issue auto-closed when the build succeeds.`;
+            const issue = await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body, labels: ['ci-failure']});
+            await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: issue.data.number, body: `Issue created for failed workflow run ${runUrl}. To auto-close this issue when the build passes, include #${issue.data.number} in your next commit message.`});
+            return issue.data.number;
