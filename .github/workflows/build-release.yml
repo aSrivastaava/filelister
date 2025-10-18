@@ -10,7 +10,6 @@ permissions:
   packages: write
   id-token: write
   issues: write
-  issues: write
 
 jobs:
   build-release:
