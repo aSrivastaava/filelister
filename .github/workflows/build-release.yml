@@ -77,6 +77,7 @@ jobs:
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ steps.ver.outputs.next }}
           files: dist/filelister.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
