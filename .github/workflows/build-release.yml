@@ -1,0 +1,68 @@
+name: Build and Release EXE
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+
+      - name: Determine next version
+        id: ver
+        run: |
+          git fetch --tags
+          latest=$(git tag -l "v*" --sort=-v:refname | head -n1)
+          if [ -z "$latest" ]; then
+            echo "v1.0" > next.txt
+            echo "next=v1.0" >> $GITHUB_OUTPUT
+          else
+            # remove leading v
+            ver=${latest#v}
+            IFS='.' read -r major minor <<< "$ver"
+            minor=$((minor + 1))
+            next="v${major}.${minor}"
+            echo "${next}" > next.txt
+            echo "next=${next}" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Build EXE
+        run: |
+          pyinstaller --noconfirm --onefile --name filelister.exe run.py
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.ver.outputs.next }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/filelister.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

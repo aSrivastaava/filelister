@@ -50,3 +50,16 @@ Notes and next steps:
 
 - For very large directories this app loads entries in the background but still inserts into the Treeview on the main thread; consider adding paging or lazy loading.
   -- To build an EXE, use PyInstaller: `pip install pyinstaller; pyinstaller --onefile run.py`.
+
+## Automated releases
+
+This repository includes a GitHub Actions workflow at `.github/workflows/build-release.yml` which runs on every push to `main`. It will:
+
+- Compute the next version tag automatically from existing `vMAJOR.MINOR` tags (for example, if the latest tag is `v1.0` it will create `v1.1`). If no tags exist it starts from `v1.0`.
+- Build a single-file EXE using PyInstaller on Windows.
+- Create a GitHub Release with the new tag and upload the built EXE as a release asset.
+
+Notes:
+
+- The workflow uses the repository's `GITHUB_TOKEN` to create releases and upload assets. No extra secrets are required for the basic flow.
+- If you want custom versioning, or to trigger releases manually, consider changing the workflow to listen to tag creation events instead of push-to-main.
